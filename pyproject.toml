@@ -1,0 +1,15 @@
+[project]
+name = "comfyui_llama_swap"
+description = "A ComfyUI custom node for llama-swap the hot-swap model manager for llama.cpp."
+version = "1.0"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/ai-joe-git/comfyui_llama_swap"
+
+[tool.comfy]
+PublisherId = "ai-joe-git"
+DisplayName = "ComfyUI llama-swap"
+Icon = ""
