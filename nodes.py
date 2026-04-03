@@ -24,6 +24,43 @@ def _tensor_to_base64(image_tensor) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def _parse_thinking_control(thinking_control: str) -> tuple[str, bool]:
+    """
+    Parse thinking_control dropdown value.
+    Returns: (model_series, thinking_enabled)
+    """
+    if "Other Models" in thinking_control:
+        return "Other Models", True
+    elif "Gemma 4 Series" in thinking_control:
+        return "Gemma 4 Series", "Enabled" in thinking_control
+    elif "Qwen 3.5 Series" in thinking_control:
+        return "Qwen 3.5 Series", "Enabled" in thinking_control
+    return "Other Models", True
+
+
+def _apply_thinking_control(model_series: str, thinking_enabled: bool, 
+                           system_prompt: str, server_url: str, payload: dict) -> tuple[str, dict]:
+    """
+    Apply thinking control based on model series.
+    Returns: (modified_system_prompt, modified_payload)
+    """
+    if model_series == "Gemma 4 Series":
+        if thinking_enabled:
+            if system_prompt and "<|think|>" not in system_prompt:
+                system_prompt = "<|think|>\n" + system_prompt
+        else:
+            if system_prompt:
+                system_prompt = system_prompt.replace("<|think|>\n", "").replace("<|think|>", "")
+    
+    elif model_series == "Qwen 3.5 Series":
+        if not thinking_enabled:
+            if "extra_body" not in payload:
+                payload["extra_body"] = {}
+            payload["extra_body"]["chat_template_kwargs"] = {"enable_thinking": False}
+    
+    return system_prompt, payload
+
+
 class LlamaSwapClient:
     CATEGORY = "llama-swap"
     RETURN_TYPES = ("STRING", "STRING")
@@ -65,6 +102,17 @@ class LlamaSwapClient:
                 }),
             },
             "optional": {
+                "thinking_control": ("COMBO", {
+                    "default": "Other Models - Thinking Default",
+                    "values": [
+                        "Other Models - Thinking Default",
+                        "Gemma 4 Series - Thinking Enabled",
+                        "Gemma 4 Series - Thinking Disabled",
+                        "Qwen 3.5 Series - Thinking Enabled",
+                        "Qwen 3.5 Series - Thinking Disabled",
+                    ],
+                    "tooltip": "Select model series and thinking mode",
+                }),
                 "image_1": ("IMAGE", {
                     "tooltip": "First image for vision models (refer as 'image 1' in prompt)",
                 }),
@@ -181,6 +229,7 @@ class LlamaSwapClient:
 
     def generate(self, 
              server_url, model, system_prompt, prompt, unload_after_generate,
+             thinking_control="Other Models - Thinking Default",
              image_1=None, image_2=None, image_3=None, image_4=None,
              use_temperature=False, temperature=0.8,
              use_top_k=False, top_k=40,
@@ -191,10 +240,24 @@ class LlamaSwapClient:
              use_presence_penalty=False, presence_penalty=0.0,
              use_seed=False, seed=-1):
         base_url = server_url.rstrip("/")
-        messages = []
-
+        
+        # Parse thinking control
+        model_series, thinking_enabled = _parse_thinking_control(thinking_control)
+        
+        # Build base payload first (needed for Qwen 3.5 extra_body)
+        payload = {"model": model, "messages": [], "stream": False}
+        
+        # Apply thinking control to system prompt
         if system_prompt.strip():
-            messages.append({"role": "system", "content": system_prompt.strip()})
+            system_prompt, payload = _apply_thinking_control(
+                model_series, thinking_enabled, system_prompt.strip(), server_url, payload
+            )
+            if system_prompt:
+                payload["messages"].append({"role": "system", "content": system_prompt})
+        
+        # Handle Gemma 4 with empty system prompt but thinking enabled
+        if model_series == "Gemma 4 Series" and thinking_enabled and not system_prompt.strip():
+            payload["messages"].append({"role": "system", "content": "<|think|>"})
 
         # Build content array with text and all provided images
         user_content = [{"type": "text", "text": prompt}]
@@ -207,9 +270,7 @@ class LlamaSwapClient:
                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
                 })
 
-        messages.append({"role": "user", "content": user_content})
-
-        payload = {"model": model, "messages": messages, "stream": False}
+        payload["messages"].append({"role": "user", "content": user_content})
 
         # Add generation parameters based on enable switches
         if use_temperature:
